@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         Pawchive 批量打包下载
-// @namespace    https://pawchive.st/
+// @namespace    https://github.com/takuron/raw
 // @version      1.0.0
+// @author       Takuron
+// @license      Apache-2.0
 // @description  抓取 Pawchive 文章正文与原图，打包为 zip 下载
 // @updateURL    https://raw.takuron.com/userscripts/pawchive-downloader.meta.js
 // @downloadURL  https://raw.takuron.com/userscripts/pawchive-downloader.user.js
