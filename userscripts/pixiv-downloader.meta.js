@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name        Pixiv 图片下载提取版 (极速打包+自定义命名)
 // @namespace   https://github.com/takuron/raw
-// @version     1.0.5
+// @version     1.0.6
 // @description 提取了 Pixiv Plus 脚本的图片下载功能，支持自定义命名格式与空格替换，使用 STORE 模式极速打包 ZIP。
 // @author      Ahaochan Takuron
+// @tag         download
+// @tag         pixiv
+// @tag         zip
 // @updateURL    https://raw.takuron.com/userscripts/pixiv-downloader.meta.js
 // @downloadURL  https://raw.takuron.com/userscripts/pixiv-downloader.user.js
 // @include     http*://www.pixiv.net*

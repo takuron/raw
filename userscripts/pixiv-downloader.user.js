@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name        Pixiv 图片下载提取版 (极速打包+自定义命名)
 // @namespace   https://github.com/takuron/raw
-// @version     1.0.5
+// @version     1.0.6
 // @description 提取了 Pixiv Plus 脚本的图片下载功能，支持自定义命名格式与空格替换，使用 STORE 模式极速打包 ZIP。
 // @author      Ahaochan Takuron
+// @tag         download
+// @tag         pixiv
+// @tag         zip
 // @updateURL   https://raw.takuron.com/userscripts/pixiv-downloader.meta.js
 // @downloadURL https://raw.takuron.com/userscripts/pixiv-downloader.user.js
 // @include     http*://www.pixiv.net*
@@ -135,6 +138,11 @@ jQuery($ => {
         return $downloadButtonContainer;
     };
 
+    const cleanText = html => {
+        const $div = $('<div>').html(html || '');
+        return $div.text().replace(/\s+/g, ' ').trim();
+    };
+
     const getDownloadName = () => {
         const info = illustApi();
         let name = USER_CONFIG.nameFormat;
@@ -250,6 +258,22 @@ jQuery($ => {
                                     }
 
                                     if (failCount > 0) alert(`有 ${failCount} 张图片获取失败，仅打包成功部分。`);
+
+                                    const tags = (info.tags || []).map(t => t.tag || t.name).join(', ');
+                                    const infoTxt = [
+                                        `Title: ${info.illustTitle || ''}`,
+                                        `Author: ${info.userName || ''}`,
+                                        `Service: pixiv`,
+                                        `ID: ${info.illustId || ''}`,
+                                        `Published: ${info.createDate || ''}`,
+                                        `Tags: ${tags}`,
+                                        `URL: ${location.href}`,
+                                        `Images: ${successCount}/${num}`,
+                                        '',
+                                        '---- Content ----',
+                                        cleanText(info.caption),
+                                    ].join('\n');
+                                    zip.file('info.txt', infoTxt);
 
                                     $zipBtn.find('p').html(`打包中 0%`);
                                     try {
@@ -403,7 +427,7 @@ jQuery($ => {
 
     if (isArtworkPage()) {
         artworkOriginalImage();
-        if (isMoreMode()) {
+        if (!isGifMode()) {
             artworkDownloadMultiImage();
         }
         if (isGifMode()) {
