@@ -23,7 +23,9 @@ raw/
 │   ├── pixiv-downloader.user.js
 │   ├── pixiv-downloader.meta.js
 │   ├── pawchive-downloader.user.js
-│   └── pawchive-downloader.meta.js
+│   ├── pawchive-downloader.meta.js
+│   ├── twitter-downloader.user.js
+│   └── twitter-downloader.meta.js
 └── vpsom_shell/                  # 服务器初始化与 Docker 配置脚本
     ├── setup/                    # 服务器初始化脚本
     └── docker/                   # Docker Compose 服务配置
