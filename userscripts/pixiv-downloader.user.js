@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name        Pixiv 图片下载提取版 (极速打包+自定义命名)
 // @namespace   https://github.com/takuron/raw
-// @version     1.0.7
-// @description 提取了 Pixiv Plus 脚本的图片下载功能，支持自定义命名格式与空格替换，使用 STORE 模式极速打包 ZIP。
+// @version     1.0.8
+// @description 提取了 Pixiv Plus 脚本的图片下载功能，支持自定义命名与空格替换，图片及动图均打包为带 info.txt 的 ZIP，动图可选 GIF 或图片集。
 // @author      Ahaochan Takuron
 // @tag         download
 // @tag         pixiv
@@ -143,8 +143,7 @@ jQuery($ => {
         return $div.text().replace(/\s+/g, ' ').trim();
     };
 
-    const getDownloadName = () => {
-        const info = illustApi();
+    const getDownloadName = (info = illustApi()) => {
         let name = USER_CONFIG.nameFormat;
 
         name = name.replace(/\{pid\}/g, info.illustId || '')
@@ -159,6 +158,25 @@ jQuery($ => {
         // 过滤系统非法路径字符
         name = name.replace(/[\\/:*?"<>|]/g, '');
         return name;
+    };
+
+    const addArtworkInfo = (zip, info, imageCount, totalImages, url) => {
+        const tags = (Array.isArray(info.tags) ? info.tags : info.tags?.tags || [])
+            .map(t => (t && (t.tag || t.name)) || '').filter(Boolean).join(', ');
+        const infoTxt = [
+            `Title: ${info.illustTitle || ''}`,
+            `Author: ${info.userName || ''}`,
+            `Service: pixiv`,
+            `ID: ${info.illustId || ''}`,
+            `Published: ${info.createDate || ''}`,
+            `Tags: ${tags}`,
+            `URL: ${url}`,
+            `Images: ${imageCount}/${totalImages}`,
+            '',
+            '---- Content ----',
+            cleanText(info.caption),
+        ].join('\n');
+        zip.file('info.txt', infoTxt);
     };
 
     const artworkOriginalImage = () => {
@@ -213,6 +231,7 @@ jQuery($ => {
 
                                 $(btn).attr('start', 'true');
                                 $zipBtn.find('p').html(`抓取中 0/${num}`);
+                                const artworkUrl = location.href;
 
                                 const zip = new JSZip();
 
@@ -259,21 +278,7 @@ jQuery($ => {
 
                                     if (failCount > 0) alert(`有 ${failCount} 张图片获取失败，仅打包成功部分。`);
 
-                                    const tags = (Array.isArray(info.tags) ? info.tags : []).map(t => (t && (t.tag || t.name)) || '').filter(Boolean).join(', ');
-                                    const infoTxt = [
-                                        `Title: ${info.illustTitle || ''}`,
-                                        `Author: ${info.userName || ''}`,
-                                        `Service: pixiv`,
-                                        `ID: ${info.illustId || ''}`,
-                                        `Published: ${info.createDate || ''}`,
-                                        `Tags: ${tags}`,
-                                        `URL: ${location.href}`,
-                                        `Images: ${successCount}/${num}`,
-                                        '',
-                                        '---- Content ----',
-                                        cleanText(info.caption),
-                                    ].join('\n');
-                                    zip.file('info.txt', infoTxt);
+                                    addArtworkInfo(zip, info, successCount, num, artworkUrl);
 
                                     $zipBtn.find('p').html(`打包中 0%`);
                                     try {
@@ -303,6 +308,75 @@ jQuery($ => {
         });
     };
 
+    const getUgoiraFrames = async (info, updateProgress) => {
+        updateProgress('获取元数据...');
+        const metadata = await new Promise((resolve, reject) => {
+            $.ajax({
+                url: `/ajax/illust/${info.illustId}/ugoira_meta`, dataType: 'json',
+                success: ({body, error, message}) => error ? reject(new Error(message || '元数据获取失败')) : resolve(body),
+                error: () => reject(new Error('元数据获取失败'))
+            });
+        });
+        if (!metadata?.originalSrc || !metadata.frames?.length) {
+            throw new Error('动图元数据不完整');
+        }
+
+        updateProgress('下载图片集...');
+        const data = await new Promise((resolve, reject) => {
+            GM.xmlHttpRequest({
+                method: 'GET', url: metadata.originalSrc,
+                headers: {referer: 'https://www.pixiv.net/'},
+                responseType: 'arraybuffer', timeout: 60000,
+                onload: res => res.status === 200 ? resolve(res.response) : reject(new Error(`HTTP ${res.status}`)),
+                onerror: () => reject(new Error('图片集下载失败')),
+                ontimeout: () => reject(new Error('图片集下载超时'))
+            });
+        });
+        const sourceZip = await JSZip.loadAsync(data);
+        const frames = [];
+        for (const frame of metadata.frames) {
+            updateProgress(`读取帧 ${frames.length + 1}/${metadata.frames.length}`);
+            const file = sourceZip.file(frame.file);
+            if (!file) throw new Error(`图片集缺少帧: ${frame.file}`);
+            const suffix = frame.file.split('.').pop().toLowerCase();
+            const mimeType = {png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif'}[suffix];
+            const blob = new Blob([await file.async('uint8array')], {type: mimeType || metadata.mime_type || 'application/octet-stream'});
+            frames.push({...frame, suffix, blob});
+        }
+        return frames;
+    };
+
+    const renderUgoiraGif = async (frames, info, updateProgress) => {
+        const frameUrls = [];
+        try {
+            const gifFactory = new GIF({workers: 2, quality: 10});
+            for (let index = 0; index < frames.length; index++) {
+                updateProgress(`载入帧 ${index + 1}/${frames.length}`);
+                const frame = frames[index];
+                const img = document.createElement('img');
+                img.width = info.width;
+                img.height = info.height;
+                const url = URL.createObjectURL(frame.blob);
+                frameUrls.push(url);
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = () => reject(new Error(`帧载入失败: ${frame.file}`));
+                    img.src = url;
+                });
+                gifFactory.addFrame(img, {delay: frame.delay});
+            }
+            updateProgress('渲染中...');
+            return await new Promise((resolve, reject) => {
+                gifFactory.on('progress', pct => updateProgress(`渲染 ${Math.floor(pct * 100)}%`));
+                gifFactory.on('finished', resolve);
+                gifFactory.on('abort', () => reject(new Error('GIF 渲染已中止')));
+                gifFactory.render();
+            });
+        } finally {
+            frameUrls.forEach(url => URL.revokeObjectURL(url));
+        }
+    };
+
     const artworkDownloadGifImage = () => {
         observerFactory({
             callback: (mutations) => {
@@ -314,110 +388,51 @@ jQuery($ => {
                         const $shareBtn = $(addedNode).find('div:has(> button[class^="style_transparentButton"]):eq(1)');
                         if($shareBtn.length <= 0 || $shareBtn.siblings('#ahao-download-gif').length > 0) continue;
 
-                        const $zipBtn = addImageDownloadBtn({
-                            $shareButtonContainer: $shareBtn,
-                            id: 'ahao-download-zip',
-                            text: 'zip',
-                        });
-
-                        const $gifBtn = addImageDownloadBtn({
-                            $shareButtonContainer: $shareBtn,
-                            id: 'ahao-download-gif',
-                            text: 'gif',
-                            clickFun() {
-                                const btn = this;
-                                if ($(btn).attr('start') === 'true') return;
-                                $(btn).attr('start', 'true');
-                                $gifBtn.find('p').text(`获取元数据...`);
-
-                                $.ajax({
-                                    url: `/ajax/illust/${illustApi().illustId}/ugoira_meta`, dataType: 'json',
-                                    success: async ({body}) => {
-                                        let gifUrl;
-                                        const gifFrames = [];
-                                        const gifFactory = new GIF({workers: 2, quality: 10});
-
-                                        const frames = body.frames;
-
-                                        for (let frameIdx = 0; frameIdx < frames.length; frameIdx++) {
-                                            $gifBtn.find('p').text(`抓取帧 ${frameIdx + 1}/${frames.length}`);
-                                            const frame = frames[frameIdx];
-                                            const u = illustApi().urls.original.replace('ugoira0.', `ugoira${frameIdx}.`);
-
-                                            try {
-                                                const responseText = await new Promise((resolve, reject) => {
-                                                    GM.xmlHttpRequest({
-                                                        method: 'GET', url: u,
-                                                        headers: {referer: 'https://www.pixiv.net/'},
-                                                        overrideMimeType: 'text/plain; charset=x-user-defined',
-                                                        timeout: 10000,
-                                                        onload: res => res.status === 200 ? resolve(res.responseText) : reject(`HTTP ${res.status}`),
-                                                        onerror: err => reject(err),
-                                                        ontimeout: () => reject('Timeout')
-                                                    });
-                                                });
-
-                                                const data = new Uint8Array(responseText.length);
-                                                for (let i = 0; i < responseText.length; i++) data[i] = responseText.charCodeAt(i);
-                                                const suffix = u.split('.').pop();
-                                                const mimeType = {png: "image/png", jpg: "image/jpeg", gif: "image/gif"}[suffix];
-                                                const blob = new Blob([data], {type: mimeType});
-
-                                                const img = document.createElement('img');
-                                                img.src = URL.createObjectURL(blob);
-                                                img.width = illustApi().width;
-                                                img.height = illustApi().height;
-
-                                                await new Promise((resolveImg) => {
-                                                    img.onload = () => {
-                                                        gifFrames.push({frame: img, option: {delay: frame.delay}});
-                                                        resolveImg();
-                                                    };
-                                                });
-                                            } catch (error) {
-                                                console.error(`GIF 帧 ${frameIdx} 下载失败:`, error);
-                                            }
+                        const addUgoiraDownloadBtn = (mode, id, text) => {
+                            const $downloadBtn = addImageDownloadBtn({
+                                $shareButtonContainer: $shareBtn, id, text,
+                                async clickFun() {
+                                    const btn = this;
+                                    if ($(btn).attr('start') === 'true') return;
+                                    $(btn).attr('start', 'true');
+                                    const updateProgress = message => $downloadBtn.find('p').text(message);
+                                    try {
+                                        const info = illustApi();
+                                        const artworkUrl = location.href;
+                                        const baseName = getDownloadName(info);
+                                        const frames = await getUgoiraFrames(info, updateProgress);
+                                        const zip = new JSZip();
+                                        if (mode === 'gif') {
+                                            const gifBlob = await renderUgoiraGif(frames, info, updateProgress);
+                                            zip.file(`${baseName}.gif`, gifBlob, {binary: true});
+                                            addArtworkInfo(zip, info, 1, 1, artworkUrl);
+                                        } else {
+                                            frames.forEach((frame, index) => {
+                                                zip.file(`${baseName}_${index}.${frame.suffix}`, frame.blob, {binary: true});
+                                            });
+                                            addArtworkInfo(zip, info, frames.length, frames.length, artworkUrl);
                                         }
-
-                                        if (gifFrames.length === 0) {
-                                            $gifBtn.find('p').text(`获取失败`);
+                                        updateProgress('打包中 0%');
+                                        const content = await zip.generateAsync({type: 'blob', compression: 'STORE'}, metadata => {
+                                            updateProgress(`打包中 ${metadata.percent.toFixed(0)}%`);
+                                        });
+                                        saveAs(content, baseName + '.zip');
+                                        updateProgress('完成!');
+                                        setTimeout(() => {
+                                            updateProgress(text);
                                             $(btn).attr('start', 'false');
-                                            return;
-                                        }
-
-                                        $gifBtn.find('p').text(`渲染中...`);
-                                        $.each(gifFrames, (i, f) => gifFactory.addFrame(f.frame, f.option));
-
-                                        gifFactory.on('progress', pct => {
-                                            $gifBtn.find('p').text(`渲染 ${parseInt(pct * 100)}%`);
-                                        });
-
-                                        gifFactory.on('finished', blob => {
-                                            gifUrl = URL.createObjectURL(blob);
-                                            const baseName = getDownloadName();
-                                            const $a = $(`<a href="${gifUrl}" download="${baseName}.gif"></a>`);
-                                            $gifBtn.find('button').wrap($a);
-                                            $gifBtn.find('p').text(`完成!`);
-                                        });
-
-                                        gifFactory.render();
-                                    },
-                                    error: () => {
-                                        $gifBtn.find('p').text(`元数据失败`);
+                                        }, 3000);
+                                    } catch (error) {
+                                        console.error('动图下载失败:', error);
+                                        updateProgress('下载失败，点击重试');
                                         $(btn).attr('start', 'false');
                                     }
-                                });
-                            }
-                        });
+                                }
+                            });
+                        };
 
-                        $.ajax({
-                            url: `/ajax/illust/${illustApi().illustId}/ugoira_meta`, dataType: 'json',
-                            success: ({body}) => {
-                                const baseName = getDownloadName();
-                                const $a = $(`<a href="${body.originalSrc}" download="${baseName}.zip"></a>`);
-                                $zipBtn.find('button').wrap($a);
-                            }
-                        });
+                        addUgoiraDownloadBtn('frames', 'ahao-download-zip', '下载图片集压缩包');
+                        addUgoiraDownloadBtn('gif', 'ahao-download-gif', '下载 GIF 压缩包');
                     }
                 }
             },
