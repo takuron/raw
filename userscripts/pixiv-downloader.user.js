@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Pixiv 图片下载提取版 (极速打包+自定义命名)
 // @namespace   https://github.com/takuron/raw
-// @version     1.0.8
+// @version     1.0.9
 // @description 提取了 Pixiv Plus 脚本的图片下载功能，支持自定义命名与空格替换，图片及动图均打包为带 info.txt 的 ZIP，动图可选 GIF 或图片集。
 // @author      Ahaochan Takuron
 // @tag         download
@@ -348,8 +348,17 @@ jQuery($ => {
 
     const renderUgoiraGif = async (frames, info, updateProgress) => {
         const frameUrls = [];
+        let gifFactory;
+        let renderTimeout;
         try {
-            const gifFactory = new GIF({workers: 2, quality: 10});
+            // @require 的 gif.js 已将 worker 打包成 Blob URL，必须显式使用它。
+            if (typeof GIF_worker_URL !== 'string' || !GIF_worker_URL.startsWith('blob:')) {
+                throw new Error('GIF 渲染组件未加载，请刷新页面后重试');
+            }
+            gifFactory = new GIF({
+                workers: 2, quality: 10, workerScript: GIF_worker_URL,
+                width: info.width, height: info.height
+            });
             for (let index = 0; index < frames.length; index++) {
                 updateProgress(`载入帧 ${index + 1}/${frames.length}`);
                 const frame = frames[index];
@@ -367,12 +376,33 @@ jQuery($ => {
             }
             updateProgress('渲染中...');
             return await new Promise((resolve, reject) => {
-                gifFactory.on('progress', pct => updateProgress(`渲染 ${Math.floor(pct * 100)}%`));
+                const resetTimeout = () => {
+                    clearTimeout(renderTimeout);
+                    renderTimeout = setTimeout(() => reject(new Error('GIF 渲染超时，请重试')), 120000);
+                };
+                gifFactory.on('start', () => {
+                    const workers = new Set([...gifFactory.activeWorkers, ...gifFactory.freeWorkers]);
+                    workers.forEach(worker => {
+                        worker.addEventListener('error', () => reject(new Error('GIF 渲染失败，请重试')));
+                        worker.addEventListener('messageerror', () => reject(new Error('GIF 渲染数据读取失败，请重试')));
+                    });
+                });
+                gifFactory.on('progress', pct => {
+                    resetTimeout();
+                    updateProgress(`渲染 ${Math.floor(pct * 100)}%`);
+                });
                 gifFactory.on('finished', resolve);
                 gifFactory.on('abort', () => reject(new Error('GIF 渲染已中止')));
+                gifFactory.on('error', reject);
+                resetTimeout();
                 gifFactory.render();
             });
         } finally {
+            clearTimeout(renderTimeout);
+            if (gifFactory) {
+                const workers = new Set([...gifFactory.activeWorkers, ...gifFactory.freeWorkers]);
+                workers.forEach(worker => worker.terminate());
+            }
             frameUrls.forEach(url => URL.revokeObjectURL(url));
         }
     };
