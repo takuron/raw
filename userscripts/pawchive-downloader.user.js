@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pawchive 批量打包下载
 // @namespace    https://github.com/takuron/raw
-// @version      1.0.0
+// @version      1.0.1
 // @author       Takuron
 // @license      Apache-2.0
 // @description  抓取 Pawchive 文章正文与原图，打包为 zip 下载
@@ -12,10 +12,8 @@
 // @require      https://update.greasyfork.org/scripts/518632/1489865/jszip-min-js.js
 // @require      https://update.greasyfork.org/scripts/498746/1399668/FileSaver.js
 // @grant        GM_xmlhttpRequest
-// @connect      file.pawchive.pw
-// @connect      file.pawchive.st
-// @connect      img.pawchive.pw
-// @connect      img.pawchive.st
+// @connect      pawchive.pw
+// @connect      pawchive.st
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -50,10 +48,13 @@
     const contentParas = [...document.querySelectorAll('.post__content > p')];
     const content = contentParas.map(p => p.innerText).join('\n\n');
 
-    const files = [...document.querySelectorAll('a.fileThumb')].map(a => ({
-      url: a.href,
-      name: a.getAttribute('download') || a.href.split('/').pop(),
-    }));
+    const files = [...document.querySelectorAll('a.fileThumb')].map(a => {
+      const url = new URL(a.href, location.href);
+      return {
+        url: url.href,
+        name: a.getAttribute('download') || url.searchParams.get('f') || url.pathname.split('/').pop(),
+      };
+    });
 
     return { service, id, title, author, published, content, url: location.href, files };
   }
@@ -65,15 +66,18 @@
         GM_xmlhttpRequest({
           method: 'GET',
           url,
-          headers: { referer: location.origin },
-          overrideMimeType: 'text/plain; charset=x-user-defined',
+          headers: { referer: location.origin + '/' },
+          responseType: 'arraybuffer',
           timeout: 30000,
           onload: res => {
             if (res.status === 200) {
-              const text = res.responseText;
-              const data = new Uint8Array(text.length);
-              for (let i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
-              resolve(data);
+              if (/^content-type:\s*text\/html\b/im.test(res.responseHeaders || '')) {
+                reject(new Error('CDN 返回了拦截页面，请先在浏览器打开原图完成验证 @ ' + url));
+              } else if (!res.response || !res.response.byteLength) {
+                reject(new Error('empty response @ ' + url));
+              } else {
+                resolve(new Uint8Array(res.response));
+              }
             } else if (attempts < RETRY) { attempts++; tryOnce(); }
             else reject(new Error('HTTP ' + res.status + ' @ ' + url));
           },
@@ -125,6 +129,7 @@
     const pkgName = `[${meta.service}][${meta.id}]${meta.title}.zip`;
     let successCount = 0;
     let failCount = 0;
+    let lastError = '';
 
     for (let i = 0; i < meta.files.length; i++) {
       const f = meta.files[i];
@@ -137,12 +142,14 @@
         successCount++;
       } catch (err) {
         failCount++;
+        lastError = err.message || String(err);
+        console.warn('[Pawchive 下载] 图片获取失败：', f.url, err);
       }
       statusEl.textContent = `抓取中 ${successCount + failCount}/${meta.files.length}`;
     }
 
     if (successCount === 0) {
-      statusEl.textContent = '❌ 全部图片抓取失败';
+      statusEl.textContent = '❌ 全部图片抓取失败：' + lastError;
       return;
     }
     if (failCount > 0) {
