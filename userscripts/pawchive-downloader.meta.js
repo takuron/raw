@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pawchive 批量打包下载
 // @namespace    https://github.com/takuron/raw
-// @version      1.0.1
+// @version      1.0.2
 // @author       Takuron
 // @license      Apache-2.0
 // @description  抓取 Pawchive 文章正文与原图，打包为 zip 下载

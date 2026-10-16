@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pawchive 批量打包下载
 // @namespace    https://github.com/takuron/raw
-// @version      1.0.1
+// @version      1.0.2
 // @author       Takuron
 // @license      Apache-2.0
 // @description  抓取 Pawchive 文章正文与原图，打包为 zip 下载
@@ -120,10 +120,14 @@
   async function run(statusEl) {
     const meta = parseMeta();
     if (!meta.files.length) {
-      statusEl.textContent = '⚠️ 未发现可下载的图片';
-      return;
+      if (!confirm('未发现可下载的图片，是否仅打包文章信息（info.txt）为 ZIP 下载？')) {
+        statusEl.textContent = '已取消下载';
+        return;
+      }
     }
-    statusEl.textContent = `准备下载 ${meta.files.length} 张图片…`;
+    statusEl.textContent = meta.files.length
+      ? `准备下载 ${meta.files.length} 张图片…`
+      : '准备打包文章信息…';
 
     const zip = new JSZip();
     const pkgName = `[${meta.service}][${meta.id}]${meta.title}.zip`;
@@ -148,7 +152,7 @@
       statusEl.textContent = `抓取中 ${successCount + failCount}/${meta.files.length}`;
     }
 
-    if (successCount === 0) {
+    if (meta.files.length > 0 && successCount === 0) {
       statusEl.textContent = '❌ 全部图片抓取失败：' + lastError;
       return;
     }
