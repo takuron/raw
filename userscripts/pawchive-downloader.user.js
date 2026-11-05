@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         Pawchive 批量打包下载
 // @namespace    https://github.com/takuron/raw
-// @version      1.0.2
+// @version      1.0.3
 // @author       Takuron
 // @license      Apache-2.0
 // @description  抓取 Pawchive 文章正文与原图，打包为 zip 下载
 // @updateURL    https://raw.takuron.com/userscripts/pawchive-downloader.meta.js
 // @downloadURL  https://raw.takuron.com/userscripts/pawchive-downloader.user.js
-// @match        https://pawchive.st/*/user/*/post/*
-// @match        https://pawchive.pw/*/user/*/post/*
+// @match        https://pawchive.st/*
+// @match        https://pawchive.pw/*
 // @require      https://update.greasyfork.org/scripts/518632/1489865/jszip-min-js.js
 // @require      https://update.greasyfork.org/scripts/498746/1399668/FileSaver.js
 // @grant        GM_xmlhttpRequest
@@ -21,6 +21,8 @@
   'use strict';
 
   const RETRY = 2;
+  const initializedUIs = new WeakSet();
+  let initScheduled = false;
 
   function sanitize(name) {
     return name.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_');
@@ -45,8 +47,8 @@
       published = pubEl.textContent.replace(/\s+/g, ' ').trim();
     }
 
-    const contentParas = [...document.querySelectorAll('.post__content > p')];
-    const content = contentParas.map(p => p.innerText).join('\n\n');
+    const contentEl = document.querySelector('.post__content');
+    const content = contentEl ? contentEl.innerText.trim() : '';
 
     const files = [...document.querySelectorAll('a.fileThumb')].map(a => {
       const url = new URL(a.href, location.href);
@@ -96,7 +98,7 @@
   }
 
   // ---------- UI ----------
-  function buildUI() {
+  function buildUI(container) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = '📦 打包下载';
@@ -106,14 +108,13 @@
     status.style.cssText = 'margin-left:0.5rem;font-size:0.85rem;color:#aaa;';
 
     const wrap = document.createElement('span');
+    wrap.id = 'pawchive-downloader';
     wrap.appendChild(btn);
     wrap.appendChild(status);
 
-    const actions = document.querySelector('.post__actions');
-    if (actions) actions.appendChild(wrap);
-    else document.querySelector('.post__header').appendChild(wrap);
+    container.appendChild(wrap);
 
-    return { btn, status };
+    return { btn, status, wrap };
   }
 
   // ---------- 主流程 ----------
@@ -189,8 +190,17 @@
 
   // ---------- 启动 ----------
   function init() {
-    if (!document.querySelector('section.site-section--post')) return;
-    const { btn, status } = buildUI();
+    if (!/^\/[^/]+\/user\/[^/]+\/post\/[^/]+\/?$/.test(location.pathname)) return;
+    const post = document.querySelector('section.site-section--post');
+    if (!post) return;
+    const container = post.querySelector('.post__actions') || post.querySelector('.post__header');
+    if (!container) return;
+    const existing = post.querySelector('#pawchive-downloader');
+    if (existing && initializedUIs.has(existing)) return;
+    // HTMX 的历史快照会保留按钮 HTML，但不会保留事件监听器。
+    if (existing) existing.remove();
+    const { btn, status, wrap } = buildUI(container);
+    initializedUIs.add(wrap);
     btn.addEventListener('click', () => {
       btn.disabled = true;
       run(status).catch(e => {
@@ -199,9 +209,27 @@
     });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
+  function scheduleInit() {
+    if (initScheduled) return;
+    initScheduled = true;
+    setTimeout(() => {
+      initScheduled = false;
+      init();
+    }, 0);
+  }
+
+  function start() {
     init();
+    // 监听正文替换，也兼容延迟插入文章头部的情况。
+    new MutationObserver(scheduleInit).observe(document.body, { childList: true, subtree: true });
+    document.addEventListener('htmx:afterSwap', scheduleInit);
+    document.addEventListener('htmx:historyRestore', scheduleInit);
+    window.addEventListener('popstate', scheduleInit);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
   }
 })();
